@@ -139,6 +139,7 @@ function App() {
   const [lookupName, setLookupName] = useState("");
   const [lookupCls, setLookupCls] = useState("");
   const [lookupDone, setLookupDone] = useState(false);
+  const [ticketInput, setTicketInput] = useState(""); // 取餐號碼快查（訂單後 6 碼）
   const [adminInput, setAdminInput] = useState("");
   const [adminPin, setAdminPin] = useState("");
   const [adminPinConfirm, setAdminPinConfirm] = useState("");
@@ -223,6 +224,20 @@ function App() {
         if (o.id !== orderId) return o;
         if (o.pickedUp) { const { pickedUp, pickedUpAt, ...rest } = o; return rest; }
         return { ...o, pickedUp: true, pickedUpAt: new Date().toISOString() };
+      });
+      await persistOrders(all);
+    } catch { alert("更新失敗，請再試一次"); }
+  };
+
+  // 通知學生可以取餐：在訂單上記錄 ready / readyAt，公告頁與單號查詢會用到
+  const toggleReady = async (orderId) => {
+    try {
+      let all = [];
+      try { const r = await window.storage.get(ORDERS_KEY); if (r) all = JSON.parse(r.value); } catch {}
+      all = all.map(o => {
+        if (o.id !== orderId) return o;
+        if (o.ready) { const { ready, readyAt, ...rest } = o; return rest; }
+        return { ...o, ready: true, readyAt: new Date().toISOString() };
       });
       await persistOrders(all);
     } catch { alert("更新失敗，請再試一次"); }
@@ -422,13 +437,60 @@ function App() {
     </div>
   );
 
-  if (view==="myorders") return (
+  if (view==="myorders") {
+    // 公告：所有「已通知可取餐、尚未取餐」的訂單，依通知時間新到舊排序
+    const readyOrders = orders.filter(o => o.ready && !o.pickedUp).sort((a,b)=> new Date(b.readyAt) - new Date(a.readyAt));
+    // 訂單對應到的攤位編號清單（同一張訂單可能跨多攤）
+    const boothNumsOf = (o) => [...new Set(o.items.map(i => BOOTHS_DEFAULT.find(b=>b.id===i.boothId)?.num).filter(Boolean))];
+    // 取餐號碼快查：去掉 # 與空白，按取餐流水號 pickupNo 比對
+    const ticketKey = ticketInput.replace(/[#\s]/g,"");
+    const ticketNum = parseInt(ticketKey, 10);
+    const ticketMatch = (ticketKey && !isNaN(ticketNum) && ticketNum > 0) ? orders.find(o => o.pickupNo === ticketNum) : null;
+    return (
     <div className="min-h-screen bg-rose-50">
       <div className="bg-white px-4 py-3 flex items-center gap-3 border-b border-rose-100">
         <button onClick={()=>setView("home")} className="text-rose-500 text-xl font-bold">←</button>
         <h2 className="font-bold text-rose-700 flex-1 text-lg">我的預購</h2>
       </div>
       <div className="px-4 pt-4 pb-6">
+        {/* 📢 可取餐公告：所有攤位已通知的訂單編號，方便學生掃看自己有沒有上榜 */}
+        <div className="bg-white rounded-2xl shadow-sm p-5 mb-4">
+          <p className="font-bold text-emerald-700 mb-1">📢 可取餐公告</p>
+          <p className="text-xs text-gray-400 mb-3">攤位通知後訂單編號會出現在這裡，看到就快來取餐</p>
+          {readyOrders.length === 0 ? (
+            <p className="text-sm text-gray-400 text-center py-4">目前尚無待取餐訂單</p>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {readyOrders.map(o => {
+                const nums = boothNumsOf(o);
+                const label = o.pickupNo ? fmtPickup(o.pickupNo) : `#${o.id.slice(-6).toUpperCase()}`;
+                return (
+                  <div key={o.id} className="bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2 text-sm">
+                    <span className="font-black text-emerald-700 tracking-wider">{label}</span>
+                    {nums.length > 0 && <span className="text-xs text-emerald-600 ml-2">攤 {nums.join(", ")}</span>}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+        {/* 🔢 取餐號碼快查：輸入預購成功時拿到的取餐編號（流水號），即時顯示狀態 */}
+        <div className="bg-white rounded-2xl shadow-sm p-5 mb-4">
+          <p className="font-bold text-rose-700 mb-1">🔢 取餐號碼快查</p>
+          <p className="text-xs text-gray-400 mb-3">輸入預購成功時看到的取餐編號（如 001）</p>
+          <input value={ticketInput} onChange={e=>setTicketInput(e.target.value)} inputMode="numeric" placeholder="例：001" maxLength="5" className="w-full border border-gray-200 rounded-xl px-4 py-3 mb-2 focus:outline-none focus:border-rose-400 tracking-widest font-mono text-center"/>
+          {ticketKey && (
+            !ticketMatch ? (
+              <div className="text-sm text-gray-500 bg-gray-50 rounded-lg px-3 py-2">查無此取餐編號</div>
+            ) : ticketMatch.pickedUp ? (
+              <div className="text-sm text-gray-500 bg-gray-50 rounded-lg px-3 py-2">{fmtPickup(ticketMatch.pickupNo)} 已於 {fmtDT(ticketMatch.pickedUpAt)} 取餐</div>
+            ) : ticketMatch.ready ? (
+              <div className="text-sm font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">✅ {fmtPickup(ticketMatch.pickupNo)} 可以取餐了！請至 攤 {boothNumsOf(ticketMatch).join(", ")}</div>
+            ) : (
+              <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">⏳ {fmtPickup(ticketMatch.pickupNo)} 攤位尚未通知，請耐心等候</div>
+            )
+          )}
+        </div>
         <div className="bg-white rounded-2xl shadow-sm p-5 mb-4">
           <p className="text-sm text-gray-500 mb-3">輸入下單時填寫的姓名與班級</p>
           <label className="block text-sm font-medium text-gray-500 mb-1.5">姓名</label>
@@ -464,7 +526,8 @@ function App() {
         ))}
       </div>
     </div>
-  );
+    );
+  }
 
   if (view==="browse") {
     const openCount = BOOTHS_DEFAULT.filter(b=>pins[b.id]).length;
@@ -770,25 +833,37 @@ function App() {
               }
             </div>
             <p className="font-bold text-gray-500 text-sm mb-2 px-1">預購名單（未取餐優先）</p>
-            <div className="bg-amber-50 rounded-xl px-3 py-2 text-xs text-amber-700 mb-3">💡 學生來付款取餐時，按下右側「取餐」鈕即記錄並更新統計</div>
+            <div className="bg-amber-50 rounded-xl px-3 py-2 text-xs text-amber-700 mb-3">💡 餐點備好按「📢 通知」公告該訂單可取餐；學生付款後按「取餐」記錄並更新統計</div>
             {myOrders.length===0 ? <div className="bg-white rounded-2xl p-10 text-center text-gray-400 shadow-sm">尚無預購訂單</div> :
               myOrders.map(o=>{
                 const myI=o.items.filter(i=>i.boothId===booth.id);
                 const sub=myI.reduce((s,i)=>s+i.price*i.qty,0);
                 return (
                   <div key={o.id} className={`bg-white rounded-2xl shadow-sm mb-2 overflow-hidden ${o.pickedUp?"opacity-70":""}`}>
-                    <div className={`flex items-center px-4 py-2.5 ${o.pickedUp?"bg-emerald-50":"bg-gray-50"}`}>
+                    <div className={`flex items-center px-4 py-2.5 ${o.pickedUp?"bg-emerald-50":(o.ready?"bg-cyan-50":"bg-gray-50")}`}>
                       {o.pickupNo && (
-                        <div className={`flex-shrink-0 mr-3 px-2.5 py-1.5 rounded-lg text-center min-w-[3.25rem] ${o.pickedUp?"bg-emerald-100 text-emerald-700":"bg-rose-100 text-rose-700"}`}>
+                        <div className={`flex-shrink-0 mr-3 px-2.5 py-1.5 rounded-lg text-center min-w-[3.25rem] ${o.pickedUp?"bg-emerald-100 text-emerald-700":(o.ready?"bg-cyan-100 text-cyan-700":"bg-rose-100 text-rose-700")}`}>
                           <div className="text-[10px] font-medium leading-none">取餐</div>
                           <div className="text-base font-black leading-tight tracking-tight">{fmtPickup(o.pickupNo)}</div>
                         </div>
                       )}
                       <div className="flex-1 min-w-0 mr-2">
-                        <div><span className={`font-bold text-sm ${o.pickedUp?"text-gray-500":"text-gray-800"}`}>{o.name}</span><span className="text-xs text-gray-400 ml-2">{o.class}</span></div>
-                        <div className="text-xs text-gray-400 mt-0.5">NT${sub}{o.pickedUp && <span className="text-emerald-600 ml-2">· 已取於 {fmtDT(o.pickedUpAt)}</span>}</div>
+                        <div>
+                          <span className={`font-bold text-sm ${o.pickedUp?"text-gray-500":"text-gray-800"}`}>{o.name}</span>
+                          <span className="text-xs text-gray-400 ml-2">{o.class}</span>
+                          <span className="text-[11px] font-mono text-gray-400 ml-2">#{o.id.slice(-6).toUpperCase()}</span>
+                        </div>
+                        <div className="text-xs text-gray-400 mt-0.5">
+                          NT${sub}
+                          {!o.pickedUp && o.ready && <span className="text-cyan-600 ml-2">· 已通知 {fmtDT(o.readyAt)}</span>}
+                          {o.pickedUp && <span className="text-emerald-600 ml-2">· 已取於 {fmtDT(o.pickedUpAt)}</span>}
+                        </div>
                       </div>
-                      <button onClick={()=>togglePickup(o.id)} className={`text-xs font-bold px-3 py-2 rounded-lg transition-colors flex-shrink-0 ${o.pickedUp?"bg-emerald-500 hover:bg-emerald-600 text-white":"bg-rose-500 hover:bg-rose-600 text-white"}`}>{o.pickedUp?"✓ 已取餐":"取餐"}</button>
+                      {/* 兩個動作鈕：通知（公告可取餐）／取餐（核銷） */}
+                      <div className="flex flex-col gap-1 flex-shrink-0">
+                        <button onClick={()=>toggleReady(o.id)} disabled={o.pickedUp} className={`text-xs font-bold px-3 py-1.5 rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${o.ready?"bg-cyan-500 hover:bg-cyan-600 text-white":"bg-white border border-cyan-300 text-cyan-600 hover:bg-cyan-50"}`}>{o.ready?"✓ 已通知":"📢 通知"}</button>
+                        <button onClick={()=>togglePickup(o.id)} className={`text-xs font-bold px-3 py-1.5 rounded-lg transition-colors ${o.pickedUp?"bg-emerald-500 hover:bg-emerald-600 text-white":"bg-rose-500 hover:bg-rose-600 text-white"}`}>{o.pickedUp?"✓ 已取餐":"取餐"}</button>
+                      </div>
                     </div>
                     <div className="px-4 py-2">{myI.map((it,i)=>(<div key={i} className="flex justify-between text-sm py-1"><span className={o.pickedUp?"text-gray-400":"text-gray-700"}>{it.itemName} ×{it.qty}</span><span className="text-gray-400">NT${it.price*it.qty}</span></div>))}</div>
                   </div>
