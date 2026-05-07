@@ -299,6 +299,7 @@ function App() {
     return s + o.items.filter(i => i.boothId===boothId && i.itemName===itemName).reduce((a,b)=>a+b.qty,0);
   }, 0);
   const getRemaining = (booth, item) => {
+    if (item.soldOut) return 0; // 攤位手動標記「已售完」，停止接受預購
     if (!item.stock || item.stock <= 0) return Infinity;
     const sold = getSold(booth.id, item.name, editingOrderId);
     return Math.max(0, item.stock - sold);
@@ -308,6 +309,7 @@ function App() {
   const addItem = (booth, item) => {
     const key = ck(booth.id, item.name, item.price);
     const cur = cart[key] || 0;
+    if (item.soldOut) { alert(`「${item.name}」已售完，停止接單`); return; }
     const remain = getRemaining(booth, item);
     if (cur + 1 > remain) { alert(`「${item.name}」剩餘 ${remain} 份，無法再加入`); return; }
     setCart(prev => ({...prev, [key]: cur + 1}));
@@ -381,7 +383,8 @@ function App() {
   };
 
   const enterEdit = (booth) => {
-    const items = getItems(booth).map(i=>({name:i.name, price:i.price, stock:i.stock||""}));
+    // soldOut 是攤位手動「完售」標記，載入時保留布林值
+    const items = getItems(booth).map(i=>({name:i.name, price:i.price, stock:i.stock||"", soldOut:!!i.soldOut}));
     setEditItems(items); setAdminTab("edit"); setEditSaved(false);
   };
   const updEdit = (idx, field, val) => setEditItems(p=>p.map((it,i)=>i===idx?{...it,[field]:val}:it));
@@ -391,6 +394,7 @@ function App() {
     const cleaned = editItems.filter(i=>i.name.trim()).map(i=>{
       const out = {name:i.name.trim(), price:parseInt(i.price)||0};
       const st = parseInt(i.stock); if (st && st > 0) out.stock = st;
+      if (i.soldOut) out.soldOut = true; // 手動標記為已售完，學生端會停止接單
       return out;
     });
     saveBoothItems(adminBooth.id, cleaned);
@@ -572,7 +576,7 @@ function App() {
                       <div key={item.name+item.price} className="flex items-center justify-between py-2 border-b border-gray-50 last:border-0">
                         <div className="flex-1 min-w-0">
                           <span className="text-sm text-gray-700">{item.name}<span className="text-rose-500 font-semibold ml-2">NT${item.price}</span></span>
-                          {limited && <span className={`ml-2 text-xs px-1.5 py-0.5 rounded ${soldOut ? "bg-gray-100 text-gray-400" : remain <= 5 ? "bg-amber-100 text-amber-700" : "bg-green-50 text-green-600"}`}>{soldOut ? "已售完" : `剩 ${remain}`}</span>}
+                          {(item.soldOut || limited) && <span className={`ml-2 text-xs px-1.5 py-0.5 rounded ${soldOut ? "bg-gray-100 text-gray-400" : remain <= 5 ? "bg-amber-100 text-amber-700" : "bg-green-50 text-green-600"}`}>{soldOut ? "已售完" : `剩 ${remain}`}</span>}
                         </div>
                         <div className="flex items-center gap-2">
                           {q>0 && (<><button onClick={()=>removeItem(booth,item)} className="w-7 h-7 rounded-full border-2 border-rose-300 text-rose-500 font-bold flex items-center justify-center leading-none">−</button><span className="w-5 text-center font-bold text-sm">{q}</span></>)}
@@ -877,6 +881,7 @@ function App() {
             <div className="bg-blue-50 border border-blue-100 rounded-2xl px-4 py-3 text-xs text-blue-600 mb-4">
               修改後按「儲存商品設定」，所有學生的預購頁面會即時更新。<br/>
               庫存上限留空＝不限量。售完後 + 鈕會自動停用。<br/>
+              現場完售時可按下方「標記為已售完」，立即停止接單。<br/>
               <span className="text-amber-600">⚠️ 已提交的訂單不會自動修正，修改前請先確認。</span>
             </div>
             <div className="bg-white rounded-2xl shadow-sm overflow-hidden mb-3">
@@ -888,14 +893,18 @@ function App() {
                 editItems.map((item,idx)=>{
                   const sold = getSold(booth.id, item.name);
                   return (
-                    <div key={idx} className="px-4 py-3 border-b border-gray-50 last:border-0">
+                    <div key={idx} className={`px-4 py-3 border-b border-gray-50 last:border-0 ${item.soldOut?"bg-gray-50":""}`}>
                       <div className="flex gap-2 items-end">
                         <div className="flex-1 min-w-0"><label className="block text-xs text-gray-400 mb-1">商品名稱</label><input value={item.name} onChange={e=>updEdit(idx,"name",e.target.value)} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-400"/></div>
                         <div className="w-16 flex-shrink-0"><label className="block text-xs text-gray-400 mb-1">售價</label><input type="number" min="1" value={item.price} onChange={e=>updEdit(idx,"price",parseInt(e.target.value)||0)} className="w-full border border-gray-200 rounded-lg px-2 py-2 text-sm text-center focus:outline-none focus:border-blue-400"/></div>
                         <div className="w-16 flex-shrink-0"><label className="block text-xs text-gray-400 mb-1">上限</label><input type="number" min="0" value={item.stock||""} onChange={e=>updEdit(idx,"stock",e.target.value)} placeholder="不限" className="w-full border border-gray-200 rounded-lg px-2 py-2 text-sm text-center focus:outline-none focus:border-blue-400"/></div>
                         <button onClick={()=>delEdit(idx)} className="w-8 h-9 rounded-lg bg-red-50 hover:bg-red-100 text-red-400 flex items-center justify-center text-xl font-bold leading-none flex-shrink-0">×</button>
                       </div>
-                      {sold > 0 && <p className="text-xs text-amber-600 mt-1 ml-1">⚠️ 此品項已被預購 {sold} 份{item.stock && parseInt(item.stock) < sold ? "（超過設定上限！）":""}</p>}
+                      {/* 完售開關：開啟後此商品停止接單；再按一次可恢復販售 */}
+                      <div className="flex items-center justify-between mt-2 ml-1 gap-2 flex-wrap">
+                        <button onClick={()=>updEdit(idx,"soldOut",!item.soldOut)} className={`text-xs px-2.5 py-1 rounded-md font-medium transition-colors ${item.soldOut?"bg-gray-700 text-white hover:bg-gray-800":"bg-white border border-gray-300 text-gray-600 hover:bg-gray-50"}`}>{item.soldOut?"🚫 已售完（停止接單）· 點此恢復":"標記為已售完"}</button>
+                        {sold > 0 && <p className="text-xs text-amber-600">⚠️ 已預購 {sold} 份{item.stock && parseInt(item.stock) < sold ? "（超過上限）":""}</p>}
+                      </div>
                     </div>
                   );
                 })
